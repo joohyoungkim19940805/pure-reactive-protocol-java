@@ -1,0 +1,71 @@
+### OS 공통/잡파일 ###
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Java 크래시 덤프
+hs_err_pid*
+replay_pid*
+
+### Gradle / 빌드 결과물 ###
+build/
+/build/
+/out/
+/bin/
+/.gradle/
+
+# Gradle 캐시 내 로컬 설정
+gradle-app.setting
+
+# 로그/임시 파일
+*.log
+*.tmp
+*.swp
+
+### IntelliJ IDEA ###
+.idea/
+*.iml
+*.ipr
+*.iws
+
+
+##### backend #####
+
+# Compiled class file
+*.class
+
+# Log file
+*.log
+
+# BlueJ files
+*.ctxt
+
+# Mobile Tools for Java (J2ME)
+.mtj.tmp/
+
+# Package Files #
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+hs_err_pid*
+replay_pid*
+
+HELP.md
+.gradle
+build/
+!gradle/wrapper/gradle-wrapper.jar
+### VS Code ###
+.vscode/
+
+### 테스트/도구 생성 산출물 (있을 수 있는 것들) ###
+/test-output/
+/target/       # 혹시 Maven 같이 쓰는 경우 대비
+/.attach_pid*
+

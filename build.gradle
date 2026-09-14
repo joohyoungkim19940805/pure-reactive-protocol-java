@@ -1,0 +1,116 @@
+// build.gradle
+plugins {
+    id 'java-library'
+    id "com.vanniktech.maven.publish" version "0.36.0"
+}
+
+group = 'com.byeolnaerim'
+version = '0.0.1-alpha'
+
+jar {
+    archiveBaseName = 'pure-reactive-protocol'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+    withSourcesJar()
+    // withJavadocJar()
+}
+
+repositories {
+    mavenCentral()
+    maven { url = uri('https://repo.spring.io/milestone') }
+    maven { url = uri('https://repo.spring.io/snapshot') }
+}
+
+dependencies {
+    api platform('io.projectreactor:reactor-bom:2025.0.7')
+    api 'io.projectreactor:reactor-core'
+    api 'org.reactivestreams:reactive-streams:1.0.4'
+
+    api 'tools.jackson.core:jackson-databind:3.0.4'
+
+    api 'tech.kwik:flupke:0.9.4'
+    api 'tech.kwik:kwik:0.11'
+
+    compileOnly platform('org.springframework.boot:spring-boot-dependencies:4.1.1')
+    compileOnly 'org.springframework.boot:spring-boot-autoconfigure'
+    compileOnly 'org.springframework:spring-context'
+    compileOnly 'org.springframework:spring-beans'
+    compileOnly 'org.springframework:spring-core'
+    compileOnly 'org.springframework:spring-aop'
+    compileOnly 'org.springframework:spring-webflux'
+    compileOnly 'org.springframework:spring-messaging'
+    compileOnly 'io.rsocket:rsocket-core'
+    compileOnly 'io.netty:netty-buffer'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:6.0.1'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:6.0.1'
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += ['-parameters']
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(Javadoc).configureEach {
+    options.encoding = 'UTF-8'
+    options.charSet = 'UTF-8'
+    options.docEncoding = 'UTF-8'
+    options.addStringOption('Xdoclint:none', '-quiet')
+    failOnError = false
+}
+
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.SourcesJar
+
+mavenPublishing {
+    configureBasedOnAppliedPlugins(
+        new JavadocJar.Empty(),
+        new SourcesJar.Sources()
+    )
+
+    publishToMavenCentral()
+    signAllPublications()
+
+    coordinates(project.group, 'pure-reactive-protocol', project.version)
+
+    pom {
+        name = 'Pure Reactive Protocol'
+        description = 'Transport-neutral reactive protocol runtime with RPC, datagram, Reactor, Spring, WebFlux, RSocket compatibility, and WebTransport adapters.'
+        url = 'https://github.com/joohyoungkim19940805/pure-reactive-protocol'
+
+        licenses {
+            license {
+                name = 'The Apache License, Version 2.0'
+                url = 'https://www.apache.org/licenses/LICENSE-2.0.txt'
+            }
+        }
+
+        developers {
+            developer {
+                id = 'joohyoungkim19940805'
+                name = '김주형'
+                email = 'oozu1994@gmail.com'
+                url = 'https://byeolnaerim.com'
+            }
+        }
+
+        scm {
+            url = 'https://github.com/joohyoungkim19940805/pure-reactive-protocol-java'
+            connection = 'scm:git:git://github.com/joohyoungkim19940805/pure-reactive-protocol-java.git'
+            developerConnection = 'scm:git:ssh://git@github.com/joohyoungkim19940805/pure-reactive-protocol-java.git'
+        }
+    }
+}
+
+import org.gradle.api.publish.tasks.GenerateModuleMetadata
+
+tasks.withType(GenerateModuleMetadata).configureEach {
+    dependsOn(tasks.named('emptyJavadocJar'))
+}
