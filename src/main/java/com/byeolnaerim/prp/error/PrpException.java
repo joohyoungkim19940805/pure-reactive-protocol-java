@@ -1,7 +1,11 @@
 package com.byeolnaerim.prp.error;
 
 public class PrpException extends RuntimeException {
-    private final String code;
+    /**
+	 * 
+	 */
+	private static final long serialVersionUID = 1L;
+	private final String code;
 
     public PrpException(String message, String code) {
         super(message);
