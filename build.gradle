@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'com.byeolnaerim'
-version = '0.0.1-alpha'
+version = '0.0.1-alpha1'
 
 jar {
     archiveBaseName = 'pure-reactive-protocol'
