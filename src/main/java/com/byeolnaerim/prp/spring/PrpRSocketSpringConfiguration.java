@@ -1,10 +1,12 @@
 package com.byeolnaerim.prp.spring;
 
 import com.byeolnaerim.prp.profile.rpc.PayloadCodec;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.rsocket.RSocketStrategies;
 import org.springframework.messaging.rsocket.annotation.support.RSocketMessageHandler;
 
 /** Optional RSocket 1.0 compatibility wiring. Application dispatch still uses PrpRouteRegistry. */
@@ -22,7 +24,14 @@ public class PrpRSocketSpringConfiguration {
 
     @Bean(name = "rsocketMessageHandler")
     @ConditionalOnMissingBean(RSocketMessageHandler.class)
-    public RSocketMessageHandler prpRSocketMessageHandler(PrpRSocketRegistryAdapter adapter) {
-        return new PrpRSocketBootstrapHandler(adapter, "spring-webflux-rsocket");
+    public RSocketMessageHandler prpRSocketMessageHandler(
+        PrpRSocketRegistryAdapter adapter,
+        ObjectProvider<RSocketStrategies> strategiesProvider
+    ) {
+        return new PrpRSocketBootstrapHandler(
+            adapter,
+            "spring-webflux-rsocket",
+            strategiesProvider.getIfAvailable(RSocketStrategies::create)
+        );
     }
 }

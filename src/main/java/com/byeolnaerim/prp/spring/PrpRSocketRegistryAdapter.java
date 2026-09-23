@@ -36,11 +36,28 @@ public final class PrpRSocketRegistryAdapter {
     }
 
     public SocketAcceptor acceptor(String transport) {
+        return acceptor(transport, null);
+    }
+
+    SocketAcceptor acceptor(String transport, SocketAcceptor fallback) {
         return (setup, sendingSocket) -> {
-            validateSetup(setup);
             String metadataMime = setup.metadataMimeType();
-            return Mono.just(new RegistryResponder(transport, metadataMime, sendingSocket));
+            if (fallback == null) {
+                validateSetup(setup);
+                return Mono.just(new RegistryResponder(transport, metadataMime, sendingSocket, null));
+            }
+
+            boolean prpCompatible = supportsSetup(setup);
+            return fallback.accept(setup, sendingSocket).map(fallbackResponder -> {
+                if (!prpCompatible) return fallbackResponder;
+                return new RegistryResponder(transport, metadataMime, sendingSocket, fallbackResponder);
+            });
         };
+    }
+
+    private boolean supportsSetup(ConnectionSetupPayload setup) {
+        return codec.id().equals(setup.dataMimeType())
+            && (COMPOSITE_METADATA.equals(setup.metadataMimeType()) || ROUTING_METADATA.equals(setup.metadataMimeType()));
     }
 
     private void validateSetup(ConnectionSetupPayload setup) {
@@ -56,18 +73,22 @@ public final class PrpRSocketRegistryAdapter {
         private final String transport;
         private final String metadataMime;
         private final RSocket sendingSocket;
+        private final RSocket fallback;
 
-        private RegistryResponder(String transport, String metadataMime, RSocket sendingSocket) {
+        private RegistryResponder(String transport, String metadataMime, RSocket sendingSocket, RSocket fallback) {
             this.transport = transport;
             this.metadataMime = metadataMime;
             this.sendingSocket = sendingSocket;
+            this.fallback = fallback;
         }
 
         @Override
         public Mono<Payload> requestResponse(Payload payload) {
             try {
                 String route = route(payload, metadataMime);
-                PrpRouteDescriptor descriptor = registry.require(route, PrpInteraction.REQUEST_RESPONSE);
+                PrpRouteDescriptor descriptor = registry.find(route, PrpInteraction.REQUEST_RESPONSE);
+                if (descriptor == null && fallback != null) return fallback.requestResponse(payload);
+                if (descriptor == null) descriptor = registry.require(route, PrpInteraction.REQUEST_RESPONSE);
                 Object input = decodeAndRelease(payload, descriptor.inputType());
                 PrpContext context = new RSocketContext(route, PrpInteraction.REQUEST_RESPONSE, transport, sendingSocket, metadataMime);
                 return invoker.requestResponse(descriptor, input, context).map(value -> DefaultPayload.create(codec.encode(value)));
@@ -81,7 +102,9 @@ public final class PrpRSocketRegistryAdapter {
         public Mono<Void> fireAndForget(Payload payload) {
             try {
                 String route = route(payload, metadataMime);
-                PrpRouteDescriptor descriptor = registry.require(route, PrpInteraction.FIRE_AND_FORGET);
+                PrpRouteDescriptor descriptor = registry.find(route, PrpInteraction.FIRE_AND_FORGET);
+                if (descriptor == null && fallback != null) return fallback.fireAndForget(payload);
+                if (descriptor == null) descriptor = registry.require(route, PrpInteraction.FIRE_AND_FORGET);
                 Object input = decodeAndRelease(payload, descriptor.inputType());
                 PrpContext context = new RSocketContext(route, PrpInteraction.FIRE_AND_FORGET, transport, sendingSocket, metadataMime);
                 return invoker.fireAndForget(descriptor, input, context);
@@ -95,7 +118,9 @@ public final class PrpRSocketRegistryAdapter {
         public Flux<Payload> requestStream(Payload payload) {
             try {
                 String route = route(payload, metadataMime);
-                PrpRouteDescriptor descriptor = registry.require(route, PrpInteraction.REQUEST_STREAM);
+                PrpRouteDescriptor descriptor = registry.find(route, PrpInteraction.REQUEST_STREAM);
+                if (descriptor == null && fallback != null) return fallback.requestStream(payload);
+                if (descriptor == null) descriptor = registry.require(route, PrpInteraction.REQUEST_STREAM);
                 Object input = decodeAndRelease(payload, descriptor.inputType());
                 PrpContext context = new RSocketContext(route, PrpInteraction.REQUEST_STREAM, transport, sendingSocket, metadataMime);
                 return invoker.requestStream(descriptor, input, context).map(value -> DefaultPayload.create(codec.encode(value)));
@@ -115,15 +140,43 @@ public final class PrpRSocketRegistryAdapter {
                 Payload first = signal.get();
                 try {
                     String route = route(first, metadataMime);
-                    PrpRouteDescriptor descriptor = registry.require(route, PrpInteraction.REQUEST_CHANNEL);
-                    Flux<Object> decoded = flux.map(payload -> decodeAndRelease(payload, descriptor.inputType()));
+                    PrpRouteDescriptor descriptor = registry.find(route, PrpInteraction.REQUEST_CHANNEL);
+                    if (descriptor == null && fallback != null) return fallback.requestChannel(flux);
+                    if (descriptor == null) descriptor = registry.require(route, PrpInteraction.REQUEST_CHANNEL);
+                    PrpRouteDescriptor resolvedDescriptor = descriptor;
+                    Flux<Object> decoded = flux.map(payload -> decodeAndRelease(payload, resolvedDescriptor.inputType()));
                     PrpContext context = new RSocketContext(route, PrpInteraction.REQUEST_CHANNEL, transport, sendingSocket, metadataMime);
-                    return invoker.requestChannel(descriptor, decoded, context).map(value -> DefaultPayload.create(codec.encode(value)));
+                    return invoker.requestChannel(resolvedDescriptor, decoded, context).map(value -> DefaultPayload.create(codec.encode(value)));
                 } catch (Throwable error) {
                     safeRelease(first);
                     return Flux.error(error);
                 }
             });
+        }
+
+        @Override
+        public Mono<Void> metadataPush(Payload payload) {
+            return fallback == null ? RSocket.super.metadataPush(payload) : fallback.metadataPush(payload);
+        }
+
+        @Override
+        public double availability() {
+            return fallback == null ? RSocket.super.availability() : fallback.availability();
+        }
+
+        @Override
+        public void dispose() {
+            if (fallback != null) fallback.dispose();
+        }
+
+        @Override
+        public boolean isDisposed() {
+            return fallback != null && fallback.isDisposed();
+        }
+
+        @Override
+        public Mono<Void> onClose() {
+            return fallback == null ? RSocket.super.onClose() : fallback.onClose();
         }
     }
 
