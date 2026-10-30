@@ -33,6 +33,7 @@ public final class PrpRuntime {
         this.streamAcceptors = List.copyOf(builder.streamAcceptors);
         this.signalAcceptors = List.copyOf(builder.signalAcceptors);
         List<CapabilityDescriptor> installed = new ArrayList<>(Capabilities.base(limits, liveness));
+        if (builder.compactFrames) installed.add(CapabilityDescriptor.version1(CompactFrameCodec.CAPABILITY_ID));
         if (datagrams != null) installed.add(new CapabilityDescriptor(DatagramCodec.CAPABILITY_ID, 1, 1, DatagramCodec.encodeCapability(datagrams.maxInboundBytes())));
         Set<String> ids = new LinkedHashSet<>();
         for (CapabilityDescriptor capability : installed) ids.add(capability.id());
@@ -80,6 +81,7 @@ public final class PrpRuntime {
         private LivenessOptions liveness = LivenessOptions.DEFAULT;
         private Duration handshakeTimeout = Duration.ofSeconds(30);
         private DatagramOptions datagrams = DatagramOptions.DEFAULT;
+        private boolean compactFrames;
         private final List<ProtocolExtension> extensions = new ArrayList<>();
         private final Set<String> requiredCapabilities = new LinkedHashSet<>();
         private final List<StreamAcceptor> streamAcceptors = new ArrayList<>();
@@ -94,6 +96,7 @@ public final class PrpRuntime {
         }
         public Builder datagrams(DatagramOptions datagrams) { this.datagrams = java.util.Objects.requireNonNull(datagrams); return this; }
         public Builder disableDatagrams() { this.datagrams = null; return this; }
+        public Builder compactFrames(boolean enabled) { this.compactFrames = enabled; return this; }
         public Builder extension(ProtocolExtension extension) { this.extensions.add(java.util.Objects.requireNonNull(extension)); return this; }
         public Builder require(String capabilityId) { this.requiredCapabilities.add(capabilityId); return this; }
         public Builder streamAcceptor(StreamAcceptor acceptor) { this.streamAcceptors.add(java.util.Objects.requireNonNull(acceptor)); return this; }

@@ -9,6 +9,7 @@ public final class DatagramCodec {
     public static final String CAPABILITY_ID = "prp.core.datagram";
     public static final int MAGIC = 0x50524431; // PRD1
     public static final int HEADER_BYTES = 4;
+    public static final int COMPACT_MAGIC = 0xd1, COMPACT_HEADER_BYTES = 1;
 
     private DatagramCodec() {}
 
@@ -30,22 +31,33 @@ public final class DatagramCodec {
     }
 
     public static byte[] encode(byte[] payload, int maxFrameBytes) {
+        return encode(payload, maxFrameBytes, false);
+    }
+
+    public static byte[] encode(byte[] payload, int maxFrameBytes, boolean compact) {
         if (payload == null) throw new NullPointerException("payload");
-        long frameBytes = (long) HEADER_BYTES + payload.length;
+        long frameBytes = (compact ? COMPACT_HEADER_BYTES : HEADER_BYTES) + (long) payload.length;
         if (frameBytes > maxFrameBytes) {
             throw new IllegalArgumentException("PRP native datagram exceeds the carrier limit of " + maxFrameBytes + " bytes.");
         }
         ByteBuffer buffer = ByteBuffer.allocate((int) frameBytes);
-        buffer.putInt(MAGIC);
+        if (compact) buffer.put((byte) COMPACT_MAGIC); else buffer.putInt(MAGIC);
         buffer.put(payload);
         return buffer.array();
     }
 
     public static byte[] decode(byte[] frame, int maxPayloadBytes) {
-        if (frame == null || frame.length < HEADER_BYTES) throw new ProtocolViolationException("Truncated PRP native datagram.");
-        if (ByteBuffer.wrap(frame, 0, HEADER_BYTES).getInt() != MAGIC) throw new ProtocolViolationException("Invalid PRP native datagram magic.");
-        int payloadBytes = frame.length - HEADER_BYTES;
+        return decode(frame, maxPayloadBytes, false);
+    }
+
+    public static byte[] decode(byte[] frame, int maxPayloadBytes, boolean compact) {
+        int header = compact ? COMPACT_HEADER_BYTES : HEADER_BYTES;
+        if (frame == null || frame.length < header) throw new ProtocolViolationException("Truncated PRP native datagram.");
+        if (compact ? Byte.toUnsignedInt(frame[0]) != COMPACT_MAGIC
+                : ByteBuffer.wrap(frame, 0, HEADER_BYTES).getInt() != MAGIC)
+            throw new ProtocolViolationException("Invalid PRP native datagram magic.");
+        int payloadBytes = frame.length - header;
         if (payloadBytes > maxPayloadBytes) throw new ProtocolViolationException("PRP native datagram exceeds " + maxPayloadBytes + " application bytes.");
-        return Arrays.copyOfRange(frame, HEADER_BYTES, frame.length);
+        return Arrays.copyOfRange(frame, header, frame.length);
     }
 }

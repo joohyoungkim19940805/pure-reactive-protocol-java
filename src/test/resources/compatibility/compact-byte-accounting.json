@@ -1,0 +1,22 @@
+{
+  "capability": "prp.core.compact-frames",
+  "version": 1,
+  "javaVersion": "0.0.1-alpha3",
+  "verifiedBy": "CompactFrameCodecTest.accountsForVarintGrowthAcrossOneThousandSmallAndMtuSizedMessages",
+  "scope": "Actual legacy and compact codec output lengths; no socket, TLS, QUIC, TCP prefix, route attributes, handshake, credit or response traffic",
+  "conditions": {
+    "kind": "DATA",
+    "messages": 1000,
+    "streamId": "1",
+    "sequenceFirst": "1",
+    "sequenceLast": "1000",
+    "attributes": [],
+    "flags": 0,
+    "creditOrFragmentLength": 0
+  },
+  "cases": [
+    { "payloadBytesPerMessage": 5, "legacyBytes": 41000, "compactBytes": 9873 },
+    { "payloadBytesPerMessage": 1100, "legacyBytes": 1136000, "compactBytes": 1104873 }
+  ],
+  "interpretation": "Wire byte counts are not throughput or CPU benchmarks. Savings depend strongly on application payload size and stream/sequence values."
+}

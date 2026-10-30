@@ -26,11 +26,18 @@ public final class PrpSpringRuntimeAdapter {
     private final PrpRouteRegistry registry;
     private final PrpRouteInvoker invoker;
     private final PayloadCodec codec;
+    private final PrpSpringProperties properties;
 
     public PrpSpringRuntimeAdapter(PrpRouteRegistry registry, PrpRouteInvoker invoker, PayloadCodec codec) {
+        this(registry, invoker, codec, new PrpSpringProperties());
+    }
+
+    public PrpSpringRuntimeAdapter(PrpRouteRegistry registry, PrpRouteInvoker invoker, PayloadCodec codec,
+            PrpSpringProperties properties) {
         this.registry = java.util.Objects.requireNonNull(registry);
         this.invoker = java.util.Objects.requireNonNull(invoker);
         this.codec = java.util.Objects.requireNonNull(codec);
+        this.properties = java.util.Objects.requireNonNull(properties);
     }
 
     public PrpRuntime createRuntime(String transport) {
@@ -49,7 +56,7 @@ public final class PrpSpringRuntimeAdapter {
             registerRpc(rpc, descriptors, transport);
         }
 
-        PrpRuntime.Builder builder = PrpRuntime.builder().extension(rpc);
+        PrpRuntime.Builder builder = PrpRuntime.builder().compactFrames(properties.isCompactFrames()).extension(rpc);
         List<String> datagramRoutes = registry.datagramRoutes();
         if (!datagramRoutes.isEmpty()) {
             builder.extension(new DatagramRoutingProfile(datagramRoutes.toArray(String[]::new)));

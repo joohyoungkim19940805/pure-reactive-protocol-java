@@ -14,6 +14,7 @@ import com.byeolnaerim.prp.StreamMessage;
 import com.byeolnaerim.prp.core.Capabilities;
 import com.byeolnaerim.prp.core.CapabilityDescriptor;
 import com.byeolnaerim.prp.core.CapabilitySet;
+import com.byeolnaerim.prp.core.CompactFrameCodec;
 import com.byeolnaerim.prp.core.DatagramCodec;
 import com.byeolnaerim.prp.core.FrameCodec;
 import com.byeolnaerim.prp.core.FrameKind;
@@ -142,8 +143,9 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
             return nextConnection.openLane(LaneRequirements.reliableOrdered(Math.max(runtime.limits().maxFrameBytes(), ProtocolLimits.BOOTSTRAP.maxFrameBytes())));
         }).thenCompose(nextLane -> {
             lane = nextLane;
-            subscribeIncoming(nextLane);
-            return openOptionalDatagramLane();
+            // A replaying carrier may deliver HELLO synchronously on subscribe.
+            // Filter capabilities against the available lanes before negotiating.
+            return openOptionalDatagramLane().thenRun(() -> subscribeIncoming(nextLane));
         }).whenComplete((ignored, error) -> {
             if (error != null) {
                 Throwable failure = Stages.unwrap(error);
@@ -181,7 +183,8 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
     @Override public int maxDatagramBytes() {
         TransportLane current = datagramLane;
         if (current == null || remoteMaxInboundDatagramBytes <= 0 || !negotiated.has(DatagramCodec.CAPABILITY_ID)) return 0;
-        return Math.max(0, Math.min(remoteMaxInboundDatagramBytes, current.maxFrameBytes() - DatagramCodec.HEADER_BYTES));
+        return Math.max(0, Math.min(remoteMaxInboundDatagramBytes, current.maxFrameBytes()
+            - (compactFrames() ? DatagramCodec.COMPACT_HEADER_BYTES : DatagramCodec.HEADER_BYTES)));
     }
     @Override public boolean supports(String capabilityId) { return negotiated.has(capabilityId); }
 
@@ -253,7 +256,7 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
             return Stages.failed(new IllegalArgumentException("PRP native datagram exceeds the negotiated/carrier limit of " + maxPayloadBytes + " application bytes."));
         }
         byte[] frame;
-        try { frame = DatagramCodec.encode(data.clone(), current.maxFrameBytes()); }
+        try { frame = DatagramCodec.encode(data.clone(), current.maxFrameBytes(), compactFrames()); }
         catch (Throwable error) { return Stages.failed(error); }
         try {
             return current.write(frame).whenComplete((ignored, error) -> {
@@ -371,7 +374,9 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
         try {
             ProtocolFrame frame;
             synchronized (this) {
-                frame = FrameCodec.decode(raw, state == SessionState.CONNECTING ? ProtocolLimits.BOOTSTRAP : runtime.limits());
+                frame = state == SessionState.READY && compactFrames()
+                    ? CompactFrameCodec.decode(raw, runtime.limits())
+                    : FrameCodec.decode(raw, state == SessionState.CONNECTING ? ProtocolLimits.BOOTSTRAP : runtime.limits());
                 if (!frame.sequence().equals(expectedIncomingSequence)) throw new ProtocolViolationException("Expected peer sequence " + expectedIncomingSequence + ", received " + frame.sequence() + ".");
                 expectedIncomingSequence = expectedIncomingSequence.add(BigInteger.ONE);
                 lastInboundNanos = System.nanoTime();
@@ -507,7 +512,7 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
             @Override public void onNext(byte[] frame) {
                 if (datagramLane != transportLane || state == SessionState.CLOSED || state == SessionState.DETACHED) return;
                 try {
-                    byte[] data = DatagramCodec.decode(frame, runtime.datagrams().maxInboundBytes());
+                    byte[] data = DatagramCodec.decode(frame, runtime.datagrams().maxInboundBytes(), compactFrames());
                     lastInboundNanos = System.nanoTime();
                     SessionDatagram datagram = new SessionDatagram(data);
                     boolean handled = false;
@@ -791,7 +796,11 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
     private CompletionStage<Void> writeDataItem(StreamState stream, byte[] data, List<ProtocolAttribute> attributes) {
         if (data.length > remoteMaxInboundItemBytes) return Stages.failed(new PrpException("Logical DATA item exceeds peer maxInboundItemBytes (" + remoteMaxInboundItemBytes + ").", "ITEM_TOO_LARGE"));
         int attributeBytes;
-        try { attributeBytes = FrameCodec.measureAttributeBytes(attributes, outboundLimits); }
+        try {
+            attributeBytes = FrameCodec.measureAttributeBytes(attributes, outboundLimits);
+            if (compactFrames()) attributeBytes = Math.max(attributeBytes,
+                CompactFrameCodec.measureAttributeBytes(attributes, outboundLimits));
+        }
         catch (Throwable error) { return Stages.failed(error); }
         int firstCapacity = outboundLimits.maxFrameBytes() - FrameCodec.FRAME_HEADER_BYTES - attributeBytes;
         if (firstCapacity < 0) return Stages.failed(new IllegalArgumentException("DATA attributes do not fit the negotiated frame limit."));
@@ -888,7 +897,11 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
             }
             sequence = outgoingSequence;
             ProtocolFrame frame = new ProtocolFrame(kind, streamId, sequence, flags, headerValue, attributes, payload);
-            try { encoded = FrameCodec.encode(frame, bootstrap ? ProtocolLimits.BOOTSTRAP : outboundLimits); }
+            try {
+                encoded = !bootstrap && state == SessionState.READY && compactFrames()
+                    ? CompactFrameCodec.encode(frame, outboundLimits)
+                    : FrameCodec.encode(frame, bootstrap ? ProtocolLimits.BOOTSTRAP : outboundLimits);
+            }
             catch (Throwable error) { return Stages.failed(error); }
         }
         CompletionStage<Void> write;
@@ -912,6 +925,8 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
             return writeFrame(kind, streamId, 0, 0, List.of(), new byte[0], false);
         }).thenCompose(stage -> stage);
     }
+
+    private boolean compactFrames() { return negotiated.has(CompactFrameCodec.CAPABILITY_ID); }
 
     private CompletionStage<Void> enqueueWrite(Supplier<CompletionStage<Void>> operation) {
         CompletableFuture<Void> previous;

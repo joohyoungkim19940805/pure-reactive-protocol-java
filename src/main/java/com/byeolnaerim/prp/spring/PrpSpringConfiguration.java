@@ -3,8 +3,10 @@ package com.byeolnaerim.prp.spring;
 import com.byeolnaerim.prp.profile.rpc.PayloadCodec;
 import com.byeolnaerim.prp.profile.rpc.jackson.JacksonJsonPayloadCodec;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -14,7 +16,11 @@ import tools.jackson.databind.ObjectMapper;
 
 @Configuration(proxyBeanMethods = false)
 @Import(PrpRSocketSpringConfiguration.class)
+@EnableConfigurationProperties(PrpSpringProperties.class)
 public class PrpSpringConfiguration {
+    @Autowired(required = false)
+    private PrpSpringProperties properties;
+
     @Bean
     public PrpRouteRegistry prpRouteRegistry() {
         return new PrpRouteRegistry();
@@ -53,6 +59,8 @@ public class PrpSpringConfiguration {
         PrpRouteInvoker invoker,
         PayloadCodec codec
     ) {
-        return new PrpSpringRuntimeAdapter(registry, invoker, codec);
+        return properties == null
+            ? new PrpSpringRuntimeAdapter(registry, invoker, codec)
+            : new PrpSpringRuntimeAdapter(registry, invoker, codec, properties);
     }
 }
