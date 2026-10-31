@@ -53,6 +53,7 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -103,7 +104,8 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
     private int localActiveStreams;
     private int remoteActiveStreams;
     private int retainedStreamAttributeBytes;
-    private int inFlightReassemblyBytes;
+    // Reassembly can be released under a stream monitor; do not acquire the session monitor there.
+    private final AtomicInteger inFlightReassemblyBytes = new AtomicInteger();
     private int pendingSignalBytes;
     private int activeSignalTasks;
     private volatile long lastInboundNanos = System.nanoTime();
@@ -692,8 +694,8 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
         int total = Math.toIntExact(frame.fragmentLength());
         if (total > runtime.limits().maxInboundItemBytes()) return Stages.failed(new ProtocolViolationException("Peer fragmented DATA item exceeds maxInboundItemBytes."));
         synchronized (this) {
-            if ((long) inFlightReassemblyBytes + total > runtime.limits().maxInFlightReassemblyBytes()) return failInboundStream(stream, new PrpException("Fragment reassembly byte budget is exhausted.", "RESOURCE_EXHAUSTED"));
-            inFlightReassemblyBytes += total;
+            if ((long) inFlightReassemblyBytes.get() + total > runtime.limits().maxInFlightReassemblyBytes()) return failInboundStream(stream, new PrpException("Fragment reassembly byte budget is exhausted.", "RESOURCE_EXHAUSTED"));
+            inFlightReassemblyBytes.addAndGet(total);
         }
         try {
             Reassembly reassembly = new Reassembly(new byte[total], snapshot(frame.attributes()), frame.payload().length);
@@ -701,7 +703,7 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
             synchronized (stream) { stream.reassembly = reassembly; }
             return Stages.completed();
         } catch (Throwable error) {
-            synchronized (this) { inFlightReassemblyBytes = Math.max(0, inFlightReassemblyBytes - total); }
+            inFlightReassemblyBytes.updateAndGet(bytes -> Math.max(0, bytes - total));
             return failInboundStream(stream, new PrpException("Unable to reserve memory for fragmented DATA item.", "RESOURCE_EXHAUSTED", error));
         }
     }
@@ -772,25 +774,18 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
     private CompletionStage<Void> sendData(StreamState stream, byte[] data, List<ProtocolAttribute> attributes) {
         byte[] payload = data == null ? new byte[0] : data.clone();
         List<ProtocolAttribute> snapshot = snapshot(attributes);
-        CompletableFuture<Void> result = new CompletableFuture<>();
-        synchronized (stream) {
-            stream.writeTail = stream.writeTail.handle((ignored, error) -> null).thenCompose(ignored -> waitForOutboundCredit(stream).thenCompose(nothing -> {
+        return enqueueStreamWrite(stream, () -> waitForOutboundCredit(stream).thenCompose(ignored -> {
+            synchronized (stream) {
+                ensureOutboundOpen(stream);
+                stream.outboundCredit -= 1;
+            }
+            return writeDataItem(stream, payload, snapshot).exceptionally(writeError -> {
                 synchronized (stream) {
-                    ensureOutboundOpen(stream);
-                    stream.outboundCredit -= 1;
+                    if (!stream.cancelled && !stream.outboundClosed) stream.outboundCredit = Math.min(MAX_CREDIT, stream.outboundCredit + 1);
                 }
-                return writeDataItem(stream, payload, snapshot).exceptionally(writeError -> {
-                    synchronized (stream) {
-                        if (!stream.cancelled && !stream.outboundClosed) stream.outboundCredit = Math.min(MAX_CREDIT, stream.outboundCredit + 1);
-                    }
-                    throw new java.util.concurrent.CompletionException(Stages.unwrap(writeError));
-                });
-            })).whenComplete((ignored, error) -> {
-                if (error != null) result.completeExceptionally(Stages.unwrap(error));
-                else result.complete(null);
-            }).toCompletableFuture();
-        }
-        return result;
+                throw new java.util.concurrent.CompletionException(Stages.unwrap(writeError));
+            });
+        }));
     }
 
     private CompletionStage<Void> writeDataItem(StreamState stream, byte[] data, List<ProtocolAttribute> attributes) {
@@ -847,18 +842,33 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
         synchronized (stream) {
             if (stream.outboundClosed || stream.cancelled) return Stages.completed();
         }
-        CompletableFuture<Void> result = new CompletableFuture<>();
+        return enqueueStreamWrite(stream, () -> {
+            synchronized (stream) { if (stream.outboundClosed || stream.cancelled) return Stages.completed(); }
+            return writeFrame(FrameKind.COMPLETE, stream.id, 0, 0, List.of(), new byte[0], false).thenRun(() -> {
+                synchronized (stream) { stream.outboundClosed = true; }
+                synchronized (ReactiveSessionImpl.this) { releaseIfDone(stream); }
+            });
+        });
+    }
+
+    private CompletionStage<Void> enqueueStreamWrite(StreamState stream, Supplier<CompletionStage<Void>> operation) {
+        CompletableFuture<Void> previous;
+        CompletableFuture<Void> gate = new CompletableFuture<>();
         synchronized (stream) {
-            stream.writeTail = stream.writeTail.handle((ignored, error) -> null).thenCompose(ignored -> {
-                synchronized (stream) { if (stream.outboundClosed || stream.cancelled) return Stages.completed(); }
-                return writeFrame(FrameKind.COMPLETE, stream.id, 0, 0, List.of(), new byte[0], false).thenRun(() -> {
-                    synchronized (stream) { stream.outboundClosed = true; }
-                    synchronized (ReactiveSessionImpl.this) { releaseIfDone(stream); }
-                });
-            }).whenComplete((ignored, error) -> {
-                if (error != null) result.completeExceptionally(Stages.unwrap(error)); else result.complete(null);
-            }).toCompletableFuture();
+            previous = stream.writeTail;
+            stream.writeTail = gate;
         }
+        // Completed stages run continuations inline. Reserve FIFO order above, then leave the
+        // stream monitor before writes can acquire the session monitor or invoke user callbacks.
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        previous.handle((ignored, priorError) -> null).thenCompose(ignored -> {
+            try { return operation.get(); }
+            catch (Throwable error) { return Stages.failed(error); }
+        }).whenComplete((ignored, error) -> {
+            if (error != null) result.completeExceptionally(Stages.unwrap(error));
+            else result.complete(null);
+            gate.complete(null);
+        });
         return result;
     }
 
@@ -1090,7 +1100,8 @@ public final class ReactiveSessionImpl implements ReactiveSession, SessionIntern
     private void clearReassembly(StreamState stream) {
         synchronized (stream) {
             if (stream.reassembly == null) return;
-            synchronized (this) { inFlightReassemblyBytes = Math.max(0, inFlightReassemblyBytes - stream.reassembly.data.length); }
+            int bytes = stream.reassembly.data.length;
+            inFlightReassemblyBytes.updateAndGet(reserved -> Math.max(0, reserved - bytes));
             stream.reassembly = null;
         }
     }
