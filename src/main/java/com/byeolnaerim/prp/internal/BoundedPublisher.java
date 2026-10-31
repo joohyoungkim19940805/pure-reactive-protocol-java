@@ -137,6 +137,7 @@ public final class BoundedPublisher<T> implements Flow.Publisher<T>, AutoCloseab
             if (draining) return;
             draining = true;
         }
+        boolean released = false;
         try {
             while (true) {
                 Flow.Subscriber<? super T> target;
@@ -145,7 +146,11 @@ public final class BoundedPublisher<T> implements Flow.Publisher<T>, AutoCloseab
                 boolean finish = false;
                 synchronized (this) {
                     target = subscriber;
-                    if (target == null || cancelled) return;
+                    if (target == null || cancelled) {
+                        draining = false;
+                        released = true;
+                        return;
+                    }
                     if (failure != null) {
                         error = failure;
                         failure = null;
@@ -158,6 +163,10 @@ public final class BoundedPublisher<T> implements Flow.Publisher<T>, AutoCloseab
                         finish = true;
                         cancelled = true;
                     } else {
+                        // Hand off drain ownership while the empty/demand check is still atomic
+                        // with emit/request. A later finally must not clear a new drainer's flag.
+                        draining = false;
+                        released = true;
                         return;
                     }
                 }
@@ -166,7 +175,7 @@ public final class BoundedPublisher<T> implements Flow.Publisher<T>, AutoCloseab
                 target.onNext(item);
             }
         } finally {
-            synchronized (this) { draining = false; }
+            if (!released) synchronized (this) { draining = false; }
         }
     }
 
