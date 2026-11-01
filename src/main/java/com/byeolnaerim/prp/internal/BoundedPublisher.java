@@ -113,18 +113,13 @@ public final class BoundedPublisher<T> implements Flow.Publisher<T>, AutoCloseab
     }
 
     public void fail(Throwable error) {
-        Flow.Subscriber<? super T> target;
         synchronized (this) {
             if (failure != null || cancelled) return;
             failure = Objects.requireNonNull(error);
             queue.clear();
             notifyAll();
-            target = subscriber;
-            if (target == null || draining) return;
-            draining = true;
         }
-        try { target.onError(error); }
-        finally { synchronized (this) { draining = false; } }
+        drain();
     }
 
     public synchronized int size() { return queue.size(); }

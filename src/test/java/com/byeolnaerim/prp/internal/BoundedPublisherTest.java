@@ -111,8 +111,109 @@ class BoundedPublisherTest {
         demand.get().request(1);
         assertEquals(List.of(1), received);
         assertEquals(1, completions.get());
+        publisher.fail(new IllegalStateException("Failure after completion"));
         publisher.complete(); demand.get().request(1);
         assertEquals(1, completions.get());
+    }
+
+    @Test
+    void idleFailureSignalsOnceAndRejectsSubsequentWork() throws Exception {
+        BoundedPublisher<Integer> publisher = new BoundedPublisher<>(1);
+        AtomicReference<Flow.Subscription> demand = new AtomicReference<>();
+        AtomicInteger errors = new AtomicInteger(), completions = new AtomicInteger();
+        IllegalStateException failure = new IllegalStateException("Publisher failed");
+        publisher.subscribe(new Flow.Subscriber<>() {
+            @Override public void onSubscribe(Flow.Subscription subscription) { demand.set(subscription); }
+            @Override public void onNext(Integer item) { fail("Failure must discard buffered items"); }
+            @Override public void onError(Throwable error) { assertSame(failure, error); errors.incrementAndGet(); }
+            @Override public void onComplete() { completions.incrementAndGet(); }
+        });
+        assertTrue(publisher.emit(1));
+        publisher.fail(failure);
+        assertEquals(1, errors.get());
+        demand.get().request(1);
+        publisher.complete(); publisher.fail(new IllegalStateException("Late failure"));
+        demand.get().request(1);
+        assertEquals(1, errors.get(), "Requests after failure must not repeat onError");
+        assertEquals(0, completions.get());
+        assertFalse(publisher.emit(2));
+        assertFalse(publisher.emitWait(2));
+        assertEquals(0, publisher.size());
+        assertFalse(publisher.hasSubscriber());
+    }
+
+    @Test
+    void failureBeforeSubscriptionIsDeliveredOnceWithoutDemand() {
+        BoundedPublisher<Integer> publisher = new BoundedPublisher<>(1);
+        AtomicReference<Flow.Subscription> demand = new AtomicReference<>();
+        AtomicInteger errors = new AtomicInteger();
+        IllegalStateException failure = new IllegalStateException("Failed before subscription");
+        assertTrue(publisher.emit(1));
+        publisher.fail(failure);
+        publisher.subscribe(new Flow.Subscriber<>() {
+            @Override public void onSubscribe(Flow.Subscription subscription) { demand.set(subscription); }
+            @Override public void onNext(Integer item) { fail("Failure must discard buffered items"); }
+            @Override public void onError(Throwable error) { assertSame(failure, error); errors.incrementAndGet(); }
+            @Override public void onComplete() { fail("Expected failure"); }
+        });
+        assertEquals(1, errors.get());
+        demand.get().request(1); publisher.fail(failure);
+        assertEquals(1, errors.get());
+        assertEquals(0, publisher.size());
+    }
+
+    @Test
+    void reentrantFailureWaitsForOnNextBeforeSignallingOneError() {
+        BoundedPublisher<Integer> publisher = new BoundedPublisher<>(1);
+        AtomicReference<Flow.Subscription> demand = new AtomicReference<>();
+        AtomicInteger items = new AtomicInteger(), errors = new AtomicInteger(), activeCallbacks = new AtomicInteger();
+        IllegalStateException failure = new IllegalStateException("Reentrant failure");
+        publisher.subscribe(new Flow.Subscriber<>() {
+            @Override public void onSubscribe(Flow.Subscription subscription) { demand.set(subscription); subscription.request(Long.MAX_VALUE); }
+            @Override public void onNext(Integer item) {
+                assertEquals(0, activeCallbacks.getAndIncrement());
+                try { items.incrementAndGet(); publisher.fail(failure); }
+                finally { activeCallbacks.decrementAndGet(); }
+            }
+            @Override public void onError(Throwable error) {
+                assertEquals(0, activeCallbacks.get());
+                assertSame(failure, error); errors.incrementAndGet();
+            }
+            @Override public void onComplete() { fail("Expected failure"); }
+        });
+        assertTrue(publisher.emit(1));
+        demand.get().request(1);
+        assertEquals(1, items.get());
+        assertEquals(1, errors.get());
+        assertFalse(publisher.emit(2));
+    }
+
+    @Test
+    void failureReleasesAProducerWaitingForQueueCapacity() throws Exception {
+        BoundedPublisher<Integer> publisher = new BoundedPublisher<>(1);
+        assertTrue(publisher.emit(1));
+        CountDownLatch started = new CountDownLatch(1);
+        CompletableFuture<Boolean> outcome = new CompletableFuture<>();
+        Thread producer = new Thread(() -> {
+            started.countDown();
+            try { outcome.complete(publisher.emitWait(2)); }
+            catch (InterruptedException error) { Thread.currentThread().interrupt(); outcome.completeExceptionally(error); }
+        }, "bounded-publisher-failure-waiter");
+        producer.setDaemon(true);
+        producer.start();
+        try {
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (producer.getState() != Thread.State.WAITING && System.nanoTime() < deadline)
+                java.util.concurrent.locks.LockSupport.parkNanos(TimeUnit.MICROSECONDS.toNanos(100));
+            assertEquals(Thread.State.WAITING, producer.getState(), "Producer must be waiting on the full queue");
+            publisher.fail(new IllegalStateException("Release waiting producer"));
+            assertFalse(outcome.get(2, TimeUnit.SECONDS));
+            assertEquals(0, publisher.size());
+        } finally {
+            producer.interrupt(); producer.join(2000);
+            assertFalse(producer.isAlive(), "Producer cleanup did not finish");
+        }
     }
 
     @Test
