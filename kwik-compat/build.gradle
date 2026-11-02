@@ -9,7 +9,7 @@ plugins {
 }
 
 group = 'com.byeolnaerim'
-version = '0.11.1-prp1'
+version = '0.12.1-prp1'
 base.archivesName = 'kwik-compat'
 
 java {
@@ -35,11 +35,11 @@ configurations {
 }
 
 dependencies {
-    upstreamKwik 'tech.kwik:kwik:0.11'
-    upstreamKwikSources 'tech.kwik:kwik:0.11:sources'
+    upstreamKwik 'tech.kwik:kwik:0.12.1'
+    upstreamKwikSources 'tech.kwik:kwik:0.12.1:sources'
 
-    // Match the original Kwik 0.11 runtime dependencies without exposing its JAR.
-    runtimeOnly 'tech.kwik:agent15:3.3'
+    // Match the original Kwik 0.12.1 runtime dependencies without exposing its JAR.
+    runtimeOnly 'tech.kwik:agent15:4.0'
     runtimeOnly 'at.favre.lib:hkdf:2.0.0'
     runtimeOnly 'com.io7m.repackage.io.whitfin:io.whitfin.siphash:2.0.1'
 
@@ -48,17 +48,17 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:6.0.1'
 }
 
-def patchedSource = 'tech/kwik/core/stream/StreamOutputStreamImpl.java'
-def patchedClass = 'tech/kwik/core/stream/StreamOutputStreamImpl.class'
-def patchFile = layout.projectDirectory.file('patches/stream-send-scheduling.patch')
+def patchedSource = 'tech/kwik/core/cid/ConnectionIdManager.java'
+def patchedClass = 'tech/kwik/core/cid/ConnectionIdManager.class'
+def patchFile = layout.projectDirectory.file('patches/zero-cid-length.patch')
 def sha256 = { byte[] bytes -> MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
 
 def verifyUpstreamKwik = tasks.register('verifyUpstreamKwik') {
     inputs.files(configurations.upstreamKwik, configurations.upstreamKwikSources)
     doLast {
         [
-            (configurations.upstreamKwik.singleFile): '89466a33cc8a3cf5fbe2f351731dd5b02294bda6277a476eac64cd29734c8cd5',
-            (configurations.upstreamKwikSources.singleFile): 'f7a1c65c73ac6fa5e9ad732fc285820232d55eccfb66b222bae38a3e202ffd8d'
+            (configurations.upstreamKwik.singleFile): '179b19ac36430b723093345df66ab32fb7a10e9d2f209c7bc0beaff6a5641461',
+            (configurations.upstreamKwikSources.singleFile): '591b950174ed13e0e5ca20104a8e54516ddfd42e964f7eaaafc429d480066b50'
         ].each { file, expected ->
             if (sha256(file.bytes) != expected) throw new GradleException("Unexpected upstream artifact: ${file.name}")
         }
@@ -72,10 +72,10 @@ def generatePatchedKwikSource = tasks.register('generatePatchedKwikSource') {
     outputs.dir(layout.buildDirectory.dir('generated/sources/kwik'))
     doLast {
         def original = zipTree(configurations.upstreamKwikSources.singleFile).matching { include patchedSource }.singleFile.getText('UTF-8')
-        if (sha256(original.getBytes('UTF-8')) != '4ccfc3e8d7a38e12a4d20320fc5672a6b1b500712c2dfcd6cfc66bdd80221fc5') {
-            throw new GradleException('Unexpected original StreamOutputStreamImpl source')
+        if (sha256(original.getBytes('UTF-8')) != 'fc184afcac34b67795b78a6584cc9a974817ac6dfa1c862d45e46b8bfaf00b7d') {
+            throw new GradleException('Unexpected original ConnectionIdManager source')
         }
-        // This pinned patch contains one contextual hunk, copied from the official 0.12.1 method.
+        // This pinned patch preserves the valid zero-length peer CID during header-size calculation.
         def hunk = patchFile.asFile.readLines('UTF-8').dropWhile { !it.startsWith('@@') }.drop(1)
         if (hunk.isEmpty() || hunk.any { !it.startsWith(' ') && !it.startsWith('+') && !it.startsWith('-') }) {
             throw new GradleException('Expected one unified patch hunk')
@@ -83,13 +83,13 @@ def generatePatchedKwikSource = tasks.register('generatePatchedKwikSource') {
         def before = hunk.findAll { !it.startsWith('+') }.collect { it.substring(1) }.join('\n')
         def after = hunk.findAll { !it.startsWith('-') }.collect { it.substring(1) }.join('\n')
         if (!original.contains(before) || original.indexOf(before) != original.lastIndexOf(before)) {
-            throw new GradleException('Kwik scheduling patch does not match exactly once')
+            throw new GradleException('Kwik zero-CID patch does not match exactly once')
         }
         def modified = original.replace(before, after)
-        if (sha256(modified.getBytes('UTF-8')) != '82fdb62beeeea51e1616892806a6f37fa15428c7d3cca8ffb3fa31a9ba6f4b36') {
-            throw new GradleException('Unexpected patched StreamOutputStreamImpl source')
+        if (sha256(modified.getBytes('UTF-8')) != 'cb603045865c38a5ba1b554c8d03b19d6bb0aff61052640183e7d5b9f7acf373') {
+            throw new GradleException('Unexpected patched ConnectionIdManager source')
         }
-        modified = '// Modified 2026-11-02 by PRP contributors: backport the official Kwik 0.12.1 scheduling CAS fix.\n' + modified
+        modified = '// Modified 2026-11-02 by PRP contributors: return length zero for the existing zero-length peer CID state.\n' + modified
         def output = layout.buildDirectory.file("generated/sources/kwik/${patchedSource}").get().asFile
         output.parentFile.mkdirs()
         output.setText(modified, 'UTF-8')
@@ -108,7 +108,7 @@ tasks.named('compileTestJava', JavaCompile) {
 }
 
 // Expose a complete implementation to both project consumers (classes variant) and JAR consumers.
-// Retain the original anonymous helper class: only the scheduling method's declaring class changes.
+// Only ConnectionIdManager changes; all other upstream class bytes are retained.
 def assembleKwikClasses = tasks.register('assembleKwikClasses', Sync) {
     dependsOn verifyUpstreamKwik, tasks.named('compileJava')
     from({ zipTree(configurations.upstreamKwik.singleFile) }) {
@@ -187,7 +187,7 @@ tasks.named('test', Test) {
 ['apiElements', 'runtimeElements'].each { configuration ->
     configurations.named(configuration) {
         outgoing.capability("${project.group}:kwik-compat:${project.version}")
-        outgoing.capability('tech.kwik:kwik:0.11')
+        outgoing.capability('tech.kwik:kwik:0.12.1')
     }
 }
 
@@ -198,7 +198,7 @@ mavenPublishing {
     coordinates(project.group, 'kwik-compat', project.version)
     pom {
         name = 'Kwik compatibility fork'
-        description = 'Complete Kwik 0.11 distribution with the official Kwik 0.12.1 stream-send scheduling fix backported.'
+        description = 'Complete Kwik 0.12.1 distribution with a zero-length peer connection-ID length correction.'
         url = 'https://github.com/joohyoungkim19940805/pure-reactive-protocol-java/tree/master/kwik-compat'
         licenses {
             license {

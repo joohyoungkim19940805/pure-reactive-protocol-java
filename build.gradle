@@ -34,6 +34,7 @@ dependencies {
     api('tech.kwik:flupke:0.9.4') {
         exclude group: 'tech.kwik', module: 'kwik'
     }
+    // Complete Kwik 0.12.1 with the zero-length peer CID correction.
     api project(':kwik-compat')
 
     compileOnly platform('org.springframework.boot:spring-boot-dependencies:4.1.1')

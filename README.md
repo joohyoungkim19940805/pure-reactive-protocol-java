@@ -13,13 +13,11 @@ extension and [validation](VALIDATION.md) for tested behavior and limitations.
 ## Alpha5 carrier correction
 
 The next release coordinate is
-`com.byeolnaerim:pure-reactive-protocol:0.0.1-alpha5`. It replaces the WebTransport
-carrier's Kwik dependency with
-[`com.byeolnaerim:kwik-compat:0.11.1-prp1`](kwik-compat/README.md).
-The compatibility artifact contains Kwik 0.11 with one upstream sender-scheduling
-fix backported from Kwik 0.12.1. A callback that ran before its request was counted
-could leave buffered stream data without a pending send request. The backport
-counts the request atomically before enqueueing it.
+`com.byeolnaerim:pure-reactive-protocol:0.0.1-alpha5`. Its WebTransport carrier uses
+[`com.byeolnaerim:kwik-compat:0.12.1-prp1`](kwik-compat/README.md), a complete Kwik
+0.12.1 distribution with a minimal zero-length connection-ID correction.
+The sender-scheduling correction is already part of upstream Kwik 0.12.1;
+there is no separate sender backport in this candidate.
 
 The WebTransport adapter also handles unknown HTTP/3/GREASE frames according to
 RFC 9114 and corrects Flupke 0.9.4's signed single-byte CONNECT capsule reads.
@@ -28,23 +26,24 @@ unknown payloads are skipped without allocating from their declared lengths.
 These carrier corrections let the packaged library serve a standard browser
 without application-local copies of its transport classes.
 
-This is a generic QUIC stream correctness fix. It introduces no application
+These are generic carrier correctness corrections. They introduce no application
 policy, PRP public API, wire-format, retry or timeout changes. The compatibility
 artifact is a complete replacement dependency, rather than an extra class in the
 PRP JAR. Do not combine it with a separate `tech.kwik:kwik` dependency: both
 artifacts contain the same upstream packages. Consumers that add Kwik directly
 must remove or exclude the original artifact.
 
-A direct Kwik 0.12.1 upgrade was also evaluated. In the current WebTransport
-integration, a normal browser connection with a zero-length connection ID reached
-a null connection-ID registry during datagram size calculation. Retaining the
-known-compatible 0.11 carrier with the isolated upstream fix avoids making that
-separate compatibility change part of this release. The compatibility module's
-[README](kwik-compat/README.md) documents its scope and removal criteria.
+Unmodified Kwik 0.12.1 dereferences a null peer connection-ID registry while
+calculating datagram capacity for a valid zero-length peer CID. The compatibility
+artifact corrects `ConnectionIdManager.getCurrentPeerConnectionIdLength()` to
+return zero in that case. It preserves the peer-selected CID and does not map it
+to a PRP session ID or another fabricated identifier. The compatibility module's
+[README](kwik-compat/README.md) documents the exact scope and removal criteria.
 
 Unit regressions and packaging checks do not establish a simultaneous-connection
 capacity or a throughput improvement. Actual browser interoperability, workload
 and runtime measurements must be reported separately in [VALIDATION.md](VALIDATION.md).
+Earlier 0.11-based candidate results do not validate this 0.12.1-based artifact.
 
 ## Build and release
 
@@ -55,7 +54,7 @@ checks.
 
 The repository's default branch is `master`. Source changes on that branch do
 not publish artifacts. `0.0.1-alpha4` is already released and must not be
-overwritten. Publish the signed `kwik-compat:0.11.1-prp1` artifact first, including
+overwritten. Publish the signed `kwik-compat:0.12.1-prp1` artifact first, including
 its matching sources and license files. After that dependency is available from
 Maven Central, publish `pure-reactive-protocol:0.0.1-alpha5`. Verify the generated
 POM and Gradle module metadata resolve the compatibility artifact without the

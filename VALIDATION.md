@@ -1,4 +1,72 @@
-# Java alpha5 carrier validation — 2026-11-02
+# Java alpha5: Kwik 0.12.1 carrier validation — 2026-11-02
+
+The current source prepares `com.byeolnaerim:pure-reactive-protocol:0.0.1-alpha5`
+with `com.byeolnaerim:kwik-compat:0.12.1-prp1`. This supersedes the 0.11-based
+candidate described below; it does not publish artifacts or change a deployed
+application. The compatibility dependency now contains official Kwik 0.12.1,
+including its original sender-scheduling fix, and one additional correction:
+`ConnectionIdManager.getCurrentPeerConnectionIdLength()` returns zero for the
+existing null-registry/zero-length-peer-CID state. The peer CID is unchanged.
+
+## Correctness and packaging
+
+- Java 25 and Java 21 test runtimes each pass all 58 tests: 53 PRP tests and five
+  complete-packaged-Kwik tests, with no skipped tests or failures. Compilation
+  uses JDK 25, targeting Java 21 for PRP/tests and Java 11 for Kwik.
+- The three new CID/datagram tests fail twice on unmodified 0.12.1 and all pass
+  on the correction. They preserve zero/nonzero peer CID bytes and exercise the
+  real `sendDatagram()` path, maximum payload acceptance and oversize rejection.
+  The existing two sender-scheduling tests continue to pass on upstream 0.12.1.
+- The complete compatibility JAR contains all 270 upstream class files. Only
+  `ConnectionIdManager.class` changes; the other 269 retain their upstream bytes.
+  The complete source archive retains all 214 Java sources, with the one modified
+  file, original license header, modification notice, exact patch and build recipe.
+  A complete Java 11 source rebuild also passes.
+- Runtime dependencies match upstream 0.12.1: agent15 4.0, HKDF 2.0.0 and SipHash
+  2.0.1. The generated PRP metadata excludes Flupke's original Kwik dependency and
+  selects `kwik-compat:0.12.1-prp1`; the compatibility POM has no original Kwik JAR
+  dependency. Gradle metadata retains the single-provider capability guard.
+- External Gradle-metadata and POM-only consumers both compile for and run on
+  Java 21 with exactly one complete 0.12.1-based compatibility JAR and agent15
+  4.0. Public CID checks preserve lengths and values for zero, eight and twenty
+  bytes. Adding original Kwik 0.12.1 explicitly fails with the expected Gradle
+  provider conflict. These checks use staged local Maven-layout artifacts, not
+  a Maven CLI invocation or a Central publication; the POM-only path disables
+  Gradle metadata redirection. POM consumers adding original Kwik separately
+  must still exclude it because Maven cannot express Gradle capabilities.
+
+## Actual QUIC checks
+
+The initial packaged smoke run uses the unchanged PRP alpha5 JAR, the complete
+0.12.1-based compatibility JAR and agent15 4.0. Startup asserts that the private
+PRP carrier classes load from the packaged PRP JAR and both the CID manager and
+stream sender load from the same complete compatibility JAR. There are no
+application-local PRP carrier overrides or single-class runtime overlays.
+
+Three independent Chromium 154.0.8037.57 WebTransport peers pass 20.979 measured
+seconds of the shared-turn workload: simulation 20Hz, median representation
+5.005Hz, zero errors/stale clients/gameplay violations, and cleanup counts zero
+with JVM exit zero. The loopback fixture uses in-memory persistence; server and
+browser share a 4-CPU/16GiB cgroup limit. This smoke run does not establish higher
+concurrent capacity. Larger-stage validation is separate from the NPE correction.
+
+The packaged candidate JAR hashes are:
+
+```text
+pure-reactive-protocol-0.0.1-alpha5.jar
+84ea505919d412638f50d9f79db28319fbd29846ccd3f912620f775902d90506
+kwik-compat-0.12.1-prp1.jar
+83802a74aa780b30a73ef7b5f14737d82f1da237783cd57750a86d8412d7914b
+```
+
+Maven Central publication remains a separate release action: publish the signed
+complete compatibility artifact, matching source and metadata before PRP alpha5.
+The following 0.11-based results remain historical evidence and do not validate
+the new candidate's larger-stage capacity.
+
+---
+
+# Previous Java alpha5 candidate: Kwik 0.11 backport — 2026-11-02
 
 The candidate coordinates are `com.byeolnaerim:pure-reactive-protocol:0.0.1-alpha5`
 and `com.byeolnaerim:kwik-compat:0.11.1-prp1`. Alpha4 remains unchanged. This work
