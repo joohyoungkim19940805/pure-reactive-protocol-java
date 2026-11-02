@@ -1,0 +1,231 @@
+import java.security.MessageDigest
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.SourcesJar
+import org.gradle.api.publish.tasks.GenerateModuleMetadata
+
+plugins {
+    id 'java-library'
+    id 'com.vanniktech.maven.publish' version '0.36.0'
+}
+
+group = 'com.byeolnaerim'
+version = '0.11.1-prp1'
+base.archivesName = 'kwik-compat'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+    withSourcesJar()
+}
+
+repositories {
+    mavenCentral()
+}
+
+configurations {
+    upstreamKwik {
+        canBeConsumed = false
+        transitive = false
+    }
+    upstreamKwikSources {
+        canBeConsumed = false
+        transitive = false
+    }
+    compileOnly.extendsFrom upstreamKwik
+}
+
+dependencies {
+    upstreamKwik 'tech.kwik:kwik:0.11'
+    upstreamKwikSources 'tech.kwik:kwik:0.11:sources'
+
+    // Match the original Kwik 0.11 runtime dependencies without exposing its JAR.
+    runtimeOnly 'tech.kwik:agent15:3.3'
+    runtimeOnly 'at.favre.lib:hkdf:2.0.0'
+    runtimeOnly 'com.io7m.repackage.io.whitfin:io.whitfin.siphash:2.0.1'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:6.0.1'
+    testImplementation 'org.mockito:mockito-core:5.23.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:6.0.1'
+}
+
+def patchedSource = 'tech/kwik/core/stream/StreamOutputStreamImpl.java'
+def patchedClass = 'tech/kwik/core/stream/StreamOutputStreamImpl.class'
+def patchFile = layout.projectDirectory.file('patches/stream-send-scheduling.patch')
+def sha256 = { byte[] bytes -> MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
+
+def verifyUpstreamKwik = tasks.register('verifyUpstreamKwik') {
+    inputs.files(configurations.upstreamKwik, configurations.upstreamKwikSources)
+    doLast {
+        [
+            (configurations.upstreamKwik.singleFile): '89466a33cc8a3cf5fbe2f351731dd5b02294bda6277a476eac64cd29734c8cd5',
+            (configurations.upstreamKwikSources.singleFile): 'f7a1c65c73ac6fa5e9ad732fc285820232d55eccfb66b222bae38a3e202ffd8d'
+        ].each { file, expected ->
+            if (sha256(file.bytes) != expected) throw new GradleException("Unexpected upstream artifact: ${file.name}")
+        }
+    }
+}
+
+def generatePatchedKwikSource = tasks.register('generatePatchedKwikSource') {
+    dependsOn verifyUpstreamKwik
+    inputs.files(configurations.upstreamKwikSources)
+    inputs.file(patchFile)
+    outputs.dir(layout.buildDirectory.dir('generated/sources/kwik'))
+    doLast {
+        def original = zipTree(configurations.upstreamKwikSources.singleFile).matching { include patchedSource }.singleFile.getText('UTF-8')
+        if (sha256(original.getBytes('UTF-8')) != '4ccfc3e8d7a38e12a4d20320fc5672a6b1b500712c2dfcd6cfc66bdd80221fc5') {
+            throw new GradleException('Unexpected original StreamOutputStreamImpl source')
+        }
+        // This pinned patch contains one contextual hunk, copied from the official 0.12.1 method.
+        def hunk = patchFile.asFile.readLines('UTF-8').dropWhile { !it.startsWith('@@') }.drop(1)
+        if (hunk.isEmpty() || hunk.any { !it.startsWith(' ') && !it.startsWith('+') && !it.startsWith('-') }) {
+            throw new GradleException('Expected one unified patch hunk')
+        }
+        def before = hunk.findAll { !it.startsWith('+') }.collect { it.substring(1) }.join('\n')
+        def after = hunk.findAll { !it.startsWith('-') }.collect { it.substring(1) }.join('\n')
+        if (!original.contains(before) || original.indexOf(before) != original.lastIndexOf(before)) {
+            throw new GradleException('Kwik scheduling patch does not match exactly once')
+        }
+        def modified = original.replace(before, after)
+        if (sha256(modified.getBytes('UTF-8')) != '82fdb62beeeea51e1616892806a6f37fa15428c7d3cca8ffb3fa31a9ba6f4b36') {
+            throw new GradleException('Unexpected patched StreamOutputStreamImpl source')
+        }
+        modified = '// Modified 2026-11-02 by PRP contributors: backport the official Kwik 0.12.1 scheduling CAS fix.\n' + modified
+        def output = layout.buildDirectory.file("generated/sources/kwik/${patchedSource}").get().asFile
+        output.parentFile.mkdirs()
+        output.setText(modified, 'UTF-8')
+    }
+}
+
+sourceSets.main.java.srcDir(generatePatchedKwikSource)
+
+tasks.named('compileJava', JavaCompile) {
+    options.release = 11
+    options.encoding = 'UTF-8'
+}
+tasks.named('compileTestJava', JavaCompile) {
+    options.release = 21
+    options.encoding = 'UTF-8'
+}
+
+// Expose a complete implementation to both project consumers (classes variant) and JAR consumers.
+// Retain the original anonymous helper class: only the scheduling method's declaring class changes.
+def assembleKwikClasses = tasks.register('assembleKwikClasses', Sync) {
+    dependsOn verifyUpstreamKwik, tasks.named('compileJava')
+    from({ zipTree(configurations.upstreamKwik.singleFile) }) {
+        exclude patchedClass, 'META-INF/MANIFEST.MF'
+    }
+    from(tasks.named('compileJava').flatMap { it.destinationDirectory }) {
+        include patchedClass
+    }
+    into(layout.buildDirectory.dir('classes/kwik-compat'))
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+}
+sourceSets.main.output.classesDirs.setFrom(assembleKwikClasses)
+
+tasks.named('processResources', ProcessResources) {
+    from('NOTICE') { into 'META-INF' }
+}
+
+tasks.named('jar', Jar) {
+    manifest.attributes(
+        'Implementation-Title': 'Kwik compatibility fork',
+        'Implementation-Version': project.version,
+        'Implementation-Vendor': 'PRP contributors; original Kwik by Peter Doornbosch'
+    )
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+}
+
+tasks.named('sourcesJar', Jar) {
+    dependsOn verifyUpstreamKwik
+    from({ zipTree(configurations.upstreamKwikSources.singleFile) }) {
+        exclude patchedSource, 'META-INF/MANIFEST.MF'
+    }
+    from(files('build.gradle', 'README.md', 'NOTICE')) { into 'META-INF/kwik-compat-build' }
+    from('patches') { into 'META-INF/kwik-compat-build/patches' }
+    from(rootProject.file('gradle/wrapper/gradle-wrapper.properties')) { into 'META-INF/kwik-compat-build' }
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+}
+
+// Optional complete source rebuild; the normal JAR preserves all unrelated upstream class bytes.
+def compileAllKwikSources = tasks.register('compileAllKwikSources', JavaCompile) {
+    dependsOn generatePatchedKwikSource
+    source({ zipTree(configurations.upstreamKwikSources.singleFile).matching {
+        include '**/*.java'
+        exclude patchedSource
+    } })
+    source(generatePatchedKwikSource)
+    classpath = configurations.runtimeClasspath
+    destinationDirectory = layout.buildDirectory.dir('classes/kwik-source-rebuild')
+    options.release = 11
+    options.encoding = 'UTF-8'
+    modularity.inferModulePath = false
+    options.compilerArgumentProviders.add({
+        ['--module-path', configurations.runtimeClasspath.asPath]
+    } as CommandLineArgumentProvider)
+}
+
+tasks.register('rebuildAllFromSource', Jar) {
+    dependsOn compileAllKwikSources
+    archiveClassifier = 'source-rebuilt'
+    from(compileAllKwikSources)
+    from({ zipTree(configurations.upstreamKwikSources.singleFile) }) {
+        exclude '**/*.java', 'META-INF/MANIFEST.MF'
+    }
+    from(sourceSets.main.resources)
+    from('NOTICE') { into 'META-INF' }
+    manifest.from(tasks.named('jar').get().manifest)
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    dependsOn tasks.named('jar')
+    // Exercise the packaged implementation rather than an extra class-directory overlay.
+    classpath = sourceSets.test.output + configurations.testRuntimeClasspath + files(tasks.named('jar').flatMap { it.archiveFile })
+}
+
+['apiElements', 'runtimeElements'].each { configuration ->
+    configurations.named(configuration) {
+        outgoing.capability("${project.group}:kwik-compat:${project.version}")
+        outgoing.capability('tech.kwik:kwik:0.11')
+    }
+}
+
+mavenPublishing {
+    configureBasedOnAppliedPlugins(new JavadocJar.Empty(), new SourcesJar.Sources())
+    publishToMavenCentral()
+    signAllPublications()
+    coordinates(project.group, 'kwik-compat', project.version)
+    pom {
+        name = 'Kwik compatibility fork'
+        description = 'Complete Kwik 0.11 distribution with the official Kwik 0.12.1 stream-send scheduling fix backported.'
+        url = 'https://github.com/joohyoungkim19940805/pure-reactive-protocol-java/tree/master/kwik-compat'
+        licenses {
+            license {
+                name = 'GNU Lesser General Public License, version 3 or later'
+                url = 'https://www.gnu.org/licenses/lgpl-3.0.html'
+                distribution = 'repo'
+            }
+        }
+        developers {
+            developer {
+                id = 'peterd'
+                name = 'Peter Doornbosch'
+            }
+            developer {
+                id = 'joohyoungkim19940805'
+                name = '김주형'
+                url = 'https://byeolnaerim.com'
+            }
+        }
+        scm {
+            url = 'https://github.com/joohyoungkim19940805/pure-reactive-protocol-java'
+            connection = 'scm:git:git://github.com/joohyoungkim19940805/pure-reactive-protocol-java.git'
+            developerConnection = 'scm:git:ssh://git@github.com/joohyoungkim19940805/pure-reactive-protocol-java.git'
+        }
+    }
+}
+
+tasks.withType(GenerateModuleMetadata).configureEach {
+    dependsOn tasks.named('emptyJavadocJar')
+}

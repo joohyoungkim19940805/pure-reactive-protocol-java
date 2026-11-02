@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'com.byeolnaerim'
-version = '0.0.1-alpha4'
+version = '0.0.1-alpha5'
 
 jar {
     archiveBaseName = 'pure-reactive-protocol'
@@ -31,8 +31,10 @@ dependencies {
 
     api 'tools.jackson.core:jackson-databind:3.0.4'
 
-    api 'tech.kwik:flupke:0.9.4'
-    api 'tech.kwik:kwik:0.11'
+    api('tech.kwik:flupke:0.9.4') {
+        exclude group: 'tech.kwik', module: 'kwik'
+    }
+    api project(':kwik-compat')
 
     compileOnly platform('org.springframework.boot:spring-boot-dependencies:4.1.1')
     compileOnly 'org.springframework.boot:spring-boot-autoconfigure'

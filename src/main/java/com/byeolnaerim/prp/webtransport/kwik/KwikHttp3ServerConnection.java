@@ -78,7 +78,7 @@ final class KwikHttp3ServerConnection extends Http3ServerConnectionImpl {
             KwikWebTransportProtocol.VarInt signal = KwikWebTransportProtocol.readVarInt(input);
             if (signal.value() != KwikWebTransportProtocol.BIDIRECTIONAL_STREAM_SIGNAL) {
                 input.unread(signal.encoded());
-                super.handleBidirectionalStream(withInput(quicStream, input));
+                super.handleBidirectionalStream(withInput(quicStream, new ExtensionFrameInput(input)));
                 return;
             }
             KwikWebTransportProtocol.VarInt sessionId = KwikWebTransportProtocol.readVarInt(input);
@@ -173,6 +173,66 @@ final class KwikHttp3ServerConnection extends Http3ServerConnectionImpl {
 
     private void rejectMalformed(QuicStream stream, Throwable ignored) {
         closeConnection(KwikWebTransportProtocol.H3_FRAME_ERROR, "Malformed WebTransport stream header");
+    }
+
+    /**
+     * Flupke 0.9.4 HttpStreamImpl treats an unknown H3 frame as EOF. RFC 9114 section 7.2.8
+     * requires unknown frames, including GREASE, to be ignored. Preserve known and reserved
+     * HTTP/2 frame types so the existing HTTP/3 validator can reject illegal frame placement.
+     */
+    static final class ExtensionFrameInput extends InputStream {
+        private final InputStream input;
+        private byte[] prefix = new byte[0];
+        private int prefixAt;
+        private long remaining;
+
+        ExtensionFrameInput(InputStream input) { this.input = input; }
+
+        private boolean nextFrame() throws IOException {
+            while (prefixAt >= prefix.length && remaining == 0) {
+                int first = input.read();
+                if (first < 0) return false;
+                PushbackInputStream header = new PushbackInputStream(input, 1);
+                header.unread(first);
+                var type = KwikWebTransportProtocol.readVarInt(header);
+                var length = KwikWebTransportProtocol.readVarInt(header);
+                long id = type.value();
+                if (id <= 9 || id == 13) {
+                    prefix = new byte[type.encoded().length + length.encoded().length];
+                    System.arraycopy(type.encoded(), 0, prefix, 0, type.encoded().length);
+                    System.arraycopy(length.encoded(), 0, prefix, type.encoded().length, length.encoded().length);
+                    prefixAt = 0;
+                    remaining = length.value();
+                    return true;
+                }
+                // Stream past unknown payloads without allocating from their untrusted lengths.
+                input.skipNBytes(length.value());
+            }
+            return true;
+        }
+
+        @Override public int read() throws IOException {
+            byte[] one = new byte[1];
+            return read(one, 0, 1) < 0 ? -1 : Byte.toUnsignedInt(one[0]);
+        }
+
+        @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+            java.util.Objects.checkFromIndexSize(offset, length, bytes.length);
+            if (length == 0) return 0;
+            if (!nextFrame()) return -1;
+            if (prefixAt < prefix.length) {
+                int count = Math.min(length, prefix.length - prefixAt);
+                System.arraycopy(prefix, prefixAt, bytes, offset, count);
+                prefixAt += count;
+                return count;
+            }
+            int count = input.read(bytes, offset, (int) Math.min(length, remaining));
+            if (count < 0) throw new java.io.EOFException("Truncated HTTP/3 frame payload.");
+            remaining -= count;
+            return count;
+        }
+
+        @Override public void close() throws IOException { input.close(); }
     }
 
     private static QuicStream withInput(QuicStream delegate, InputStream input) {

@@ -1,1 +1,2 @@
 rootProject.name = 'pure-reactive-protocol-java'
+include 'kwik-compat'

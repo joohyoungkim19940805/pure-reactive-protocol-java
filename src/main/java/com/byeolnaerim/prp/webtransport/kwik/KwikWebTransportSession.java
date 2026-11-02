@@ -3,6 +3,7 @@ package com.byeolnaerim.prp.webtransport.kwik;
 import com.byeolnaerim.prp.webtransport.WebTransportHandler;
 import com.byeolnaerim.prp.webtransport.WebTransportSession;
 import java.io.InputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -145,7 +146,9 @@ final class KwikWebTransportSession implements WebTransportSession {
 
     void monitorConnectStream() {
         try {
-            InputStream input = connectStream.getInputStream();
+            // Flupke 0.9.4 sign-extends HttpStream payload bytes in its single-byte read.
+            // Capsule varints can start with 0x80..0xff; only an actual EOF ends CONNECT.
+            InputStream input = unsigned(connectStream.getInputStream());
             while (open.get()) {
                 KwikWebTransportProtocol.VarInt type;
                 try { type = KwikWebTransportProtocol.readVarInt(input); }
@@ -162,6 +165,17 @@ final class KwikWebTransportSession implements WebTransportSession {
         }
     }
 
+
+    static InputStream unsigned(InputStream source) {
+        return new java.io.FilterInputStream(source) {
+            private final byte[] one = new byte[1];
+            @Override public int read() throws IOException {
+                int count;
+                do { count = in.read(one, 0, 1); } while (count == 0);
+                return count < 0 ? -1 : Byte.toUnsignedInt(one[0]);
+            }
+        };
+    }
 
     @Override public void close() { close(true); }
     void abortBeforeEstablished() { close(false, false); }
