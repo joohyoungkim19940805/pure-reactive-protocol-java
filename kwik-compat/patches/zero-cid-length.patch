@@ -1,7 +1,0 @@
---- kwik-0.12.1/tech/kwik/core/cid/ConnectionIdManager.java
-+++ kwik-0.12.1-zero-cid/tech/kwik/core/cid/ConnectionIdManager.java
-@@ -527,3 +527,3 @@
-     public int getCurrentPeerConnectionIdLength() {
--        return peerCidRegistry.getConnectionIdLength();
-+        return peerCidRegistry == null ? 0 : peerCidRegistry.getConnectionIdLength();
-     }

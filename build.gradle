@@ -34,8 +34,7 @@ dependencies {
     api('tech.kwik:flupke:0.9.4') {
         exclude group: 'tech.kwik', module: 'kwik'
     }
-    // Complete Kwik 0.12.1 with the zero-length peer CID correction.
-    api project(':kwik-compat')
+    api 'tech.kwik:kwik:0.12.1'
 
     compileOnly platform('org.springframework.boot:spring-boot-dependencies:4.1.1')
     compileOnly 'org.springframework.boot:spring-boot-autoconfigure'
@@ -49,6 +48,7 @@ dependencies {
     compileOnly 'io.netty:netty-buffer'
 
     testImplementation 'org.junit.jupiter:junit-jupiter:6.0.1'
+    testImplementation 'org.mockito:mockito-core:5.23.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:6.0.1'
 }
 

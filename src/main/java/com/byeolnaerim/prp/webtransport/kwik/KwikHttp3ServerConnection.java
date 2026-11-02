@@ -45,7 +45,7 @@ final class KwikHttp3ServerConnection extends Http3ServerConnectionImpl {
 
     int maxWebTransportDatagramPayload(long sessionId) {
         long quarterStreamId = sessionId / 4L;
-        return Math.max(0, quicConnection.maxDatagramDataSize() - KwikWebTransportProtocol.varIntLength(quarterStreamId));
+        return Math.max(0, KwikDatagramAccess.maxDatagramDataSize(quicConnection) - KwikWebTransportProtocol.varIntLength(quarterStreamId));
     }
 
     void sendWebTransportDatagram(long sessionId, byte[] payload) {
@@ -58,7 +58,7 @@ final class KwikHttp3ServerConnection extends Http3ServerConnectionImpl {
             ByteArrayOutputStream output = new ByteArrayOutputStream(KwikWebTransportProtocol.varIntLength(quarterStreamId) + payload.length);
             KwikWebTransportProtocol.writeVarInt(output, quarterStreamId);
             output.write(payload);
-            quicConnection.sendDatagram(output.toByteArray());
+            KwikDatagramAccess.sendDatagram(quicConnection, output.toByteArray());
         } catch (IOException impossible) {
             throw new IllegalStateException(impossible);
         }

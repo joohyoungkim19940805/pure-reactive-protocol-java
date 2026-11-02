@@ -113,7 +113,7 @@ public final class KwikWebTransportServer implements WebTransportServer {
                 .maxTotalPeerInitiatedUnidirectionalStreams(Long.MAX_VALUE)
                 .build();
 
-            // Kwik 0.11 does not provide a default Logger; ServerConnectorImpl requires one.
+            // Supply the Logger required by the Kwik server connector.
             createdConnector = ServerConnector.builder()
                 .withSocket(createdSocket)
                 .withKeyStore(keyStore, certificateAlias, privateKeyPassword)

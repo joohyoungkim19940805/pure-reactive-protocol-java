@@ -1,9 +1,103 @@
-# Java alpha5: Kwik 0.12.1 carrier validation — 2026-11-02
+# Java alpha5: official Kwik 0.12.1 with a PRP datagram adapter — 2026-11-02
 
-The current source prepares `com.byeolnaerim:pure-reactive-protocol:0.0.1-alpha5`
-with `com.byeolnaerim:kwik-compat:0.12.1-prp1`. This supersedes the 0.11-based
+The current candidate is `com.byeolnaerim:pure-reactive-protocol:0.0.1-alpha5`.
+It depends directly on the unchanged official `tech.kwik:kwik:0.12.1` artifact.
+The separate compatibility module, replacement Kwik distribution, source patch,
+checksummed rebuild recipe and companion publication requirement have been
+removed. Only the PRP artifact must be built/signed/published. No external Maven
+publication or application deployment was performed by this change. Central was
+checked and alpha4 remained the latest released PRP version.
+
+## Scope and implementation
+
+`KwikHttp3ServerConnection` routes datagram size/sending through the private
+`KwikDatagramAccess` helper. For a real Kwik connection whose existing CID manager
+reports a zero-length peer CID, the helper reads the negotiated frame limit and
+original sender through two cached protected-method handles. It calculates the
+same packet/frame bound with a CID length of zero and queues the real native
+`DatagramFrame` at App encryption level with the original priority and an empty
+loss callback. It changes no CID, upstream field or connection object, does not
+retransmit a lost datagram and does not substitute a reliable stream. Nonzero CID
+and other connection implementations delegate to their original datagram API.
+
+The official JAR remains byte-for-byte unchanged. Its direct zero-CID getter and
+`sendDatagram()` still reproduce the upstream NPE in the regression; the PRP
+adapter avoids those calls only on that affected path. The official 0.12.1 sender
+CAS fix is retained unchanged and its controlled race regressions remain in the
+PRP test suite. PRP session semantics, public API and wire framing are unchanged.
+
+The protected-method dependency is pinned to Kwik 0.12.1 and must be reviewed on
+upgrade. Ordinary classpath execution requires no extra opens flags. Strong JPMS
+encapsulation can reject the implementation-package access even before CID
+detection; named-module deployment is not supported by these checks and access
+failure is explicit. An officially corrected release remains the removal target
+for this private workaround.
+
+## Verification
+
+- Java 25 and Java 21 test runtimes each pass all 62 tests, with no failures,
+  errors or skips. JDK 25 compiles the Java 21 target. The suite includes 53
+  existing PRP checks, two upstream sender-scheduling regressions and seven
+  datagram adapter regressions.
+- Actual Kwik construction/negotiation tests cover the original zero-CID NPE,
+  unchanged CID identity, peer frame limits 1/2/32/1000/65535, packet limits
+  1200/1252, payload-at-limit acceptance, oversize/null rejection, disabled and
+  receive-only capability states, native priority dispatch, no loss retransmit,
+  no stream substitution and unchanged delegation for other CID/implementations.
+  Packet dispatch and unrelated test collaborators are mocked; production
+  transport state is not changed by reflection.
+- External Gradle-metadata and POM-only consumers both compile for/run on Java 21.
+  The POM-only check disables Gradle metadata redirection; this is not a Maven CLI
+  invocation. Both resolve a single original Kwik 0.12.1 JAR, agent15 4.0 and no
+  compatibility artifact. The PRP JAR contains zero `tech/kwik/` classes.
+- The original Kwik JAR checksum is checked and sender/CID classes share that
+  original artifact origin. Generated publication metadata hashes match the
+  corresponding PRP binary/source artifacts. Consumer public builders and
+  nonzero CID identity checks pass.
+- The packaged application integration uses three independent actual Chromium
+  WebTransport/HTTP3/QUIC connections with full decoding and the current 5000ms
+  common combat period. Carrier/session/helper classes load from the PRP JAR;
+  sender and CID manager load from the original Kwik JAR, without application
+  carrier overrides or replacement upstream classes. All three pass 31.512
+  measured seconds: simulation 20.001Hz, median reliable representation 5.046Hz,
+  zero errors/stale/gameplay failures; cleanup counters zero and JVM exit zero.
+  This application fixture uses a test-only Mockito agent for its mocked
+  persistence/engine observations; the adapter itself installs no agent.
+
+A separate public-API-only server probe also passes on both Java 21 and Java 25
+with `VMargs=[]`: no Java agent, no add-opens/add-exports, no Mockito and no Hunter
+classes. Each run opens three simultaneous real Chromium WebTransport sessions,
+echoes 80,000 reliable bytes per peer exactly (240,000 total), echoes three native
+datagrams per peer (nine total), and rejects an oversized server datagram for each
+peer. It uses the original Kwik JAR with the same checksum below. All three
+sessions close, active count returns to zero and the JVM exits zero. This
+separately demonstrates that the adapter workaround itself does not depend on
+the application fixture's test agent.
+
+The current binary checksums are:
+
+```text
+pure-reactive-protocol-0.0.1-alpha5.jar
+bcb4cce128ddeab05d1637b478ea88e20923c569d9ce8872dfd1d17303f5e17d
+kwik-0.12.1.jar (official, unmodified)
+179b19ac36430b723093345df66ab32fb7a10e9d2f209c7bc0beaff6a5641461
+```
+
+The current adapter has not repeated the 100/200/300/500 capacity matrix. Those
+previous tests used the superseded patched-Kwik candidate, a shared 4-CPU/16GiB
+loopback environment, mocked persistence and a protected fixture. They do not
+prove capacity, performance improvement or production readiness of this adapter.
+All sections below are historical evidence; their compatibility coordinates and
+old companion-publication instructions do not apply to the current source.
+
+---
+
+# Historical candidate: separate patched Kwik 0.12.1 distribution — 2026-11-02
+
+This superseded candidate prepared `com.byeolnaerim:pure-reactive-protocol:0.0.1-alpha5`
+with `com.byeolnaerim:kwik-compat:0.12.1-prp1`. It superseded the 0.11-based
 candidate described below; it does not publish artifacts or change a deployed
-application. The compatibility dependency now contains official Kwik 0.12.1,
+application. That compatibility dependency contained official Kwik 0.12.1,
 including its original sender-scheduling fix, and one additional correction:
 `ConnectionIdManager.getCurrentPeerConnectionIdLength()` returns zero for the
 existing null-registry/zero-length-peer-CID state. The peer CID is unchanged.
@@ -106,8 +200,8 @@ kwik-compat-0.12.1-prp1.jar
 83802a74aa780b30a73ef7b5f14737d82f1da237783cd57750a86d8412d7914b
 ```
 
-Maven Central publication remains a separate release action: publish the signed
-complete compatibility artifact, matching source and metadata before PRP alpha5.
+Historical release plan (no longer used): this candidate would have published
+the signed complete compatibility artifact before PRP alpha5.
 The following 0.11-based results remain historical evidence and do not validate
 the new candidate's larger-stage capacity.
 
@@ -203,9 +297,9 @@ kwik-compat-0.11.1-prp1.jar
 05bba303632fbbd30dcd33185fead2e8c94d968a56a935d1c82ca4861e670c3b
 ```
 
-The signed compatibility artifact and matching sources must be published before
-the alpha5 PRP artifact can resolve from Central. Source pushes alone do not make
-either coordinate available there.
+Historical release plan (no longer used): this candidate required a separate
+compatibility artifact publication before PRP alpha5. The current adapter
+candidate above requires only the PRP artifact publication.
 
 ---
 
