@@ -1,8 +1,6 @@
 --- kwik-0.11/tech/kwik/core/stream/StreamOutputStreamImpl.java
 +++ kwik-0.11-cas-backport/tech/kwik/core/stream/StreamOutputStreamImpl.java
-@@ -126,11 +126,12 @@
-     }
- 
+@@ -128,8 +128,9 @@
      private void scheduleSendStreamFrameRequest(boolean flush) {
 -        int queued = sendRequestsQueued.get();
 -        if (queued == 0) {
@@ -16,4 +14,3 @@
 -            sendRequestsQueued.incrementAndGet();
          }
      }
- 
