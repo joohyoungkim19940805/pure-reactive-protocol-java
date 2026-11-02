@@ -13,8 +13,8 @@ existing null-registry/zero-length-peer-CID state. The peer CID is unchanged.
 - Java 25 and Java 21 test runtimes each pass all 58 tests: 53 PRP tests and five
   complete-packaged-Kwik tests, with no skipped tests or failures. Compilation
   uses JDK 25, targeting Java 21 for PRP/tests and Java 11 for Kwik.
-- The three new CID/datagram tests fail twice on unmodified 0.12.1 and all pass
-  on the correction. They preserve zero/nonzero peer CID bytes and exercise the
+- Two of the three new CID/datagram tests fail on unmodified 0.12.1; all three
+  pass on the correction. They preserve zero/nonzero peer CID bytes and exercise the
   real `sendDatagram()` path, maximum payload acceptance and oversize rejection.
   The existing two sender-scheduling tests continue to pass on upstream 0.12.1.
 - The complete compatibility JAR contains all 270 upstream class files. Only
@@ -49,6 +49,53 @@ seconds of the shared-turn workload: simulation 20Hz, median representation
 with JVM exit zero. The loopback fixture uses in-memory persistence; server and
 browser share a 4-CPU/16GiB cgroup limit. This smoke run does not establish higher
 concurrent capacity. Larger-stage validation is separate from the NPE correction.
+
+The subsequent isolated capacity checks did not establish a 500-client service
+capacity. The following shared-turn runs used real independent QUIC transports
+and complete packaged libraries. Server and browser shared the same 4-CPU/16GiB
+limit. The load generator received all payloads but validated envelope/owner/ACK
+metadata without reconstructing/rendering entities (`headers` mode).
+
+| Target | Measured live | Measured seconds | Simulation Hz | Reliable frame median Hz | Echo p95 ms |
+| --- | --- | --- | --- | --- | --- |
+| 100 | 100–100 | 71.367 | 19.99 | 5.00 | 27.1 |
+| 200 | 200–200 | 97.061 | 19.86 | 4.98 | 363.9 |
+| 300 | 300–300 | 64.361 | 19.79 | 4.54 | 3240.3 |
+| 500 | Hold not reached | — | — | — | — |
+
+At 100/200, every peer met the original transport/combat progress evidence, with
+zero transport errors, stale clients or server invariant violations. The stricter
+full scenario additionally required two accepted MOVE executions per peer;
+application player collisions prevented that for some peers, so both full-scenario
+results remain FAIL. At 300, all connections progressed but up to 16 peers were
+stale, echo p95 exceeded three seconds, gameplay rejections occurred and some
+combat execution deltas were insufficient (72 peers did not meet the original
+combat criteria); it is not a healthy service result.
+
+The 500 ramp after the 300 stage stopped at 330 attempts / 329 distinct JOINs and
+ready peers after one opening-handshake failure. A fresh 500-target run stopped
+at 310 attempts / 309 JOINs and ready peers, with three echo timeouts and one
+opening-handshake failure; the last ramp report had 306 live peers. Neither
+reached the 500 hold. Those observations do not define a universal 329/309-peer
+limit. Both failed runs cleaned session/stream/connection counters to zero and
+exited with JVM status zero.
+
+During a 162.104-second observation window after the fresh ramp started, the
+shared cgroup averaged 3.700 CPU cores, with 1287/1595 throttled periods; host
+namespace UDP receive-buffer errors increased by 32,105. These are shared/window
+pressure measurements, not per-connection cause attribution or whole-run totals.
+A failure dump contains 351 writers waiting for send-buffer space. Without the
+queued-request/buffer/credit time series, that alone does not establish recurrence
+of the old sender race or identify the exact handshake-failure cause.
+
+Earlier free-motion/full-decoder checks were a different workload: 100 peers
+progressed at 19.97Hz simulation, 200 progressed at 16.33Hz, and 300 remained live
+but failed the stale criterion at 8.96Hz. Those results are preserved separately.
+Loopback/mocked persistence, a protected non-retaliating combat fixture, metadata
+validation and controlled input scripting do not establish production database,
+external-network, continuous-WASD, full-client-rendering or long-run capacity.
+The correction fixes the demonstrated library defects; it does not guarantee
+500 simultaneous playable users or justify additional PRP semantics changes.
 
 The packaged candidate JAR hashes are:
 
